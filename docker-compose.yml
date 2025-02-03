@@ -1,0 +1,8 @@
+version: '3.8'
+
+services:
+  telegram-whisper-bot:
+    build: .
+    environment:
+      TELEGRAM_BOT_TOKEN: "7837262453:AAGf5poQab9t3v7TGHnn7fGIX8BBtuo6f8k"
+    restart: always
