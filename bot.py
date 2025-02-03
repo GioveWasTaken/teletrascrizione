@@ -5,11 +5,30 @@ import queue
 import re
 import subprocess
 import tiktoken  # Importazione di tiktoken per una migliore gestione del token
+import psutil  # Per rilevare le specifiche del sistema
+import platform
+import torch
 from telegram import Update, ChatMember
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-model = whisper.load_model("base")  # Utilizzo del modello Tiny
+# Funzione per determinare il modello in base alle specifiche del sistema
+def select_model():
+    cpu_count = psutil.cpu_count(logical=True)
+    total_ram = psutil.virtual_memory().total / (1024 ** 3)  # Convertito in GB
+    device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+
+    if device != "cpu":
+        print(f"Dispositivo accelerato rilevato: {device}")
+        return whisper.load_model("medium").to(device)  # Usa 'medium' su GPU/MPS
+    elif cpu_count >= 4 and total_ram >= 8:
+        print("Sistema con alte prestazioni rilevato. Caricamento modello 'small'...")
+        return whisper.load_model("small")
+    else:
+        print("Sistema a basse risorse rilevato. Caricamento modello 'tiny'...")
+        return whisper.load_model("tiny")
+
+# Caricamento del modello basato sulle specifiche del sistema
+model = select_model()
 
 # Coda per gestire i messaggi
 audio_queue = queue.Queue()
@@ -152,4 +171,3 @@ def main():
 
 if __name__ == '__main__':
     main()
- 
