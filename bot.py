@@ -13,12 +13,16 @@ from telegram import Update, ChatMember
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 import socket
 import logging
+import gc  # Import per la gestione della memoria
 
 # Configurazione logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 socket.setdefaulttimeout(1000)  # Aumentato il timeout a 1000 secondi
+
+# Ottimizzazione: Forzare l'uso di tutti i core disponibili
+torch.set_num_threads(psutil.cpu_count(logical=True))
 
 TOKEN = "7837262453:AAGf5poQab9t3v7TGHnn7fGIX8BBtuo6f8k"
 
@@ -63,17 +67,15 @@ def select_model():
     total_ram = psutil.virtual_memory().total / (1024 ** 3)
     system_info = platform.uname()
 
-    # Disabilitare MPS e forzare l'uso della CPU su Apple Silicon
     is_apple_silicon = "arm" in system_info.machine or "Apple" in system_info.processor
     device = "cuda" if torch.cuda.is_available() and not is_apple_silicon else "cpu"
 
-    # Selezione del modello basata sulle risorse
     if is_apple_silicon:
-        model_size = "small" if total_ram < 16 else "medium"  # L'M2 Pro può gestire modelli più grandi
-        fp16 = False  # FP16 disabilitato su Apple Silicon
+        model_size = "small" if total_ram < 16 else "medium"
+        fp16 = False
     elif torch.cuda.is_available():
         model_size = "small" if total_ram < 8 else "medium"
-        fp16 = True   # FP16 abilitato se disponibile su GPU
+        fp16 = True
     elif cpu_count >= 4 and total_ram >= 8:
         model_size = "medium"
         fp16 = False
@@ -127,23 +129,22 @@ def transcribe_audio(file_path):
     try:
         converted_path = file_path.replace(".ogg", ".wav")
 
-        # Miglioramento della qualità audio con FFmpeg
+        # Ottimizzazione FFmpeg per ridurre i tempi
         subprocess.run([
             "ffmpeg", "-i", file_path,
-            "-ar", "44100",               # Aumenta il sample rate per maggiore chiarezza
-            "-ac", "1",                   # Audio mono per ottimizzazione
-            "-af", "dynaudnorm=f=150:g=15,highpass=f=150,lowpass=f=4000,acompressor=threshold=-20dB:ratio=4:attack=5:release=50",
+            "-ar", "16000",               # Sample rate ridotto per velocizzare
+            "-ac", "1",                   # Audio mono
             converted_path
         ], check=True)
 
         result = model.transcribe(
             converted_path,
             language='it',
-            fp16=fp16,  # FP16 abilitato solo se supportato
+            fp16=fp16,
             condition_on_previous_text=False,
             task="transcribe",
-            beam_size=1,               # Ridotto il beam size per maggiore velocità
-            temperature=0.0            # Riduce la variabilità per elaborazione più rapida
+            beam_size=1,
+            temperature=0.0
         )
         text = result.get('text', '').strip()
 
@@ -158,6 +159,8 @@ def transcribe_audio(file_path):
     finally:
         if os.path.exists(converted_path):
             os.remove(converted_path)
+        gc.collect()  # Libera la memoria
+        torch.cuda.empty_cache()  # Pulisce la cache di PyTorch (anche su CPU)
 
 def censor_text(text):
     for word in censored_words:
