@@ -4,7 +4,6 @@ import threading
 import queue
 import re
 import subprocess
-import tiktoken
 import psutil
 import platform
 import torch
@@ -19,50 +18,50 @@ import logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-socket.setdefaulttimeout(500)
+socket.setdefaulttimeout(1000)  # Aumentato il timeout a 1000 secondi
 
 TOKEN = "7837262453:AAGf5poQab9t3v7TGHnn7fGIX8BBtuo6f8k"
 
-# Funzione per scaricare il modello da Hugging Face
-def download_model_from_huggingface(model_size):
+# Funzione per scaricare il modello
+def download_model(model_size):
     urls = {
-        "tiny": "https://huggingface.co/openai/whisper-tiny/resolve/main/tiny.pt",
-        "base": "https://huggingface.co/openai/whisper-base/resolve/main/base.pt",
-        "small": "https://huggingface.co/openai/whisper-small/resolve/main/small.pt",
-        "medium": "https://huggingface.co/openai/whisper-medium/resolve/main/medium.pt",
-        "large": "https://huggingface.co/openai/whisper-large/resolve/main/large.pt"
+        "huggingface": f"https://huggingface.co/openai/whisper-{model_size}/resolve/main/{model_size}.pt",
+        "openai": f"https://cdn.openai.com/whisper/models/{model_size}.pt"
     }
 
-    if model_size not in urls:
-        raise ValueError(f"Modello '{model_size}' non supportato.")
-
-    model_url = urls[model_size]
     model_path = os.path.expanduser(f"~/.cache/whisper/{model_size}.pt")
     os.makedirs(os.path.dirname(model_path), exist_ok=True)
 
-    logger.info(f"Scaricamento del modello '{model_size}' da Hugging Face...")
-    response = requests.get(model_url, stream=True)
-    total_size = int(response.headers.get('content-length', 0))
+    for source, url in urls.items():
+        try:
+            logger.info(f"Scaricamento del modello '{model_size}' da {source.capitalize()} ({url})...")
+            logger.info(f"📥 Il modello verrà scaricato in: {model_path}")  # Messaggio esplicito sul percorso di download
+            response = requests.get(url, stream=True)
+            total_size = int(response.headers.get('content-length', 0))
 
-    with open(model_path, 'wb') as file, tqdm(
-        desc=model_size,
-        total=total_size,
-        unit='B',
-        unit_scale=True,
-        unit_divisor=1024,
-    ) as bar:
-        for data in response.iter_content(chunk_size=1024):
-            file.write(data)
-            bar.update(len(data))
+            with open(model_path, 'wb') as file, tqdm(
+                desc=model_size,
+                total=total_size,
+                unit='B',
+                unit_scale=True,
+                unit_divisor=1024,
+            ) as bar:
+                for data in response.iter_content(chunk_size=1024):
+                    file.write(data)
+                    bar.update(len(data))
 
-    logger.info(f"✅ Modello '{model_size}' scaricato con successo in {model_path}")
-    return model_path
+            logger.info(f"✅ Modello '{model_size}' scaricato con successo da {source.capitalize()} in {model_path}")
+            return model_path
+        except Exception as e:
+            logger.warning(f"⚠️ Errore durante il download da {source.capitalize()}: {e}")
+
+    raise Exception("❌ Impossibile scaricare il modello da entrambe le fonti.")
 
 # Funzione per determinare il modello basato sulle specifiche del sistema
 def select_model():
     cpu_count = psutil.cpu_count(logical=True)
     total_ram = psutil.virtual_memory().total / (1024 ** 3)
-    device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"  # Forzato l'uso della CPU
     system_info = platform.uname()
 
     if "arm" in system_info.machine or "Apple" in system_info.processor:
@@ -74,15 +73,21 @@ def select_model():
     else:
         model_size = "base"
 
-    try:
-        logger.info(f"Caricamento del modello '{model_size}'...")
-        return whisper.load_model(model_size).to(device)
-    except Exception as e:
-        logger.warning(f"⚠️ Errore durante il caricamento del modello '{model_size}': {e}")
-        logger.info("Tentativo di scaricare il modello da Hugging Face...")
+    model_path = os.path.expanduser(f"~/.cache/whisper/{model_size}.pt")
 
-        model_path = download_model_from_huggingface(model_size)
-        return whisper.load_model(model_path).to(device)
+    try:
+        logger.info(f"Caricamento del modello '{model_size}' dalla cache locale...")
+        return whisper.load_model(model_size, device=device)
+    except Exception as e:
+        logger.warning(f"⚠️ Errore durante il caricamento dalla cache: {e}")
+        logger.info("Tentativo di scaricare il modello...")
+
+    model_path = download_model(model_size)
+    try:
+        return whisper.load_model(model_size, device=device)
+    except Exception as e:
+        logger.warning(f"⚠️ Errore durante il caricamento del modello scaricato: {e}")
+        raise
 
 model = select_model()
 
@@ -114,7 +119,7 @@ def transcribe_audio(file_path):
     try:
         converted_path = file_path.replace(".ogg", ".wav")
         subprocess.run([
-            "ffmpeg", "-i", file_path, "-ar", "8000", "-ac", "1", converted_path
+            "ffmpeg", "-i", file_path, "-ar", "16000", "-ac", "1", converted_path
         ], check=True)
 
         result = model.transcribe(
@@ -189,9 +194,6 @@ def list_censored_words(update: Update, context: CallbackContext):
     else:
         update.message.reply_text("Nessuna parola censurata.")
 
-def debug_handler(update: Update, context: CallbackContext):
-    logger.info(f"Ricevuto un messaggio da {update.effective_user.username}: {update.message.text}")
-
 def main():
     logger.info("✅ Avvio del bot...")
     updater = Updater(TOKEN, use_context=True)
@@ -201,15 +203,12 @@ def main():
     dp.add_handler(CommandHandler("censura", add_censored_word))
     dp.add_handler(CommandHandler("rimuovi_censura", remove_censored_word))
     dp.add_handler(CommandHandler("lista_censure", list_censored_words))
-    dp.add_handler(MessageHandler(Filters.all, debug_handler))
 
     threading.Thread(target=worker, daemon=True).start()
 
     updater.start_polling()
     logger.info("🚀 Il bot è attivo e in ascolto!")
     updater.idle()
-
-    audio_queue.put((None, None))
 
 if __name__ == '__main__':
     main()
