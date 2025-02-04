@@ -61,35 +61,43 @@ def download_model(model_size):
 def select_model():
     cpu_count = psutil.cpu_count(logical=True)
     total_ram = psutil.virtual_memory().total / (1024 ** 3)
-    device = "cpu"  # Forzato l'uso della CPU
     system_info = platform.uname()
 
-    if "arm" in system_info.machine or "Apple" in system_info.processor:
-        model_size = "medium"
-    elif device != "cpu":
-        model_size = "medium"
+    # Disabilitare MPS e forzare l'uso della CPU su Apple Silicon
+    is_apple_silicon = "arm" in system_info.machine or "Apple" in system_info.processor
+    device = "cuda" if torch.cuda.is_available() and not is_apple_silicon else "cpu"
+
+    # Selezione del modello basata sulle risorse
+    if is_apple_silicon:
+        model_size = "small" if total_ram < 16 else "medium"  # L'M2 Pro può gestire modelli più grandi
+        fp16 = False  # FP16 disabilitato su Apple Silicon
+    elif torch.cuda.is_available():
+        model_size = "small" if total_ram < 8 else "medium"
+        fp16 = True   # FP16 abilitato se disponibile su GPU
     elif cpu_count >= 4 and total_ram >= 8:
-        model_size = "small"
+        model_size = "medium"
+        fp16 = False
     else:
         model_size = "base"
+        fp16 = False
 
     model_path = os.path.expanduser(f"~/.cache/whisper/{model_size}.pt")
 
     try:
         logger.info(f"Caricamento del modello '{model_size}' dalla cache locale...")
-        return whisper.load_model(model_size, device=device)
+        return whisper.load_model(model_size, device=device), fp16
     except Exception as e:
         logger.warning(f"⚠️ Errore durante il caricamento dalla cache: {e}")
         logger.info("Tentativo di scaricare il modello...")
 
     model_path = download_model(model_size)
     try:
-        return whisper.load_model(model_size, device=device)
+        return whisper.load_model(model_size, device=device), fp16
     except Exception as e:
         logger.warning(f"⚠️ Errore durante il caricamento del modello scaricato: {e}")
         raise
 
-model = select_model()
+model, fp16 = select_model()
 
 audio_queue = queue.Queue()
 censored_words = set()
@@ -118,17 +126,24 @@ def worker():
 def transcribe_audio(file_path):
     try:
         converted_path = file_path.replace(".ogg", ".wav")
+
+        # Miglioramento della qualità audio con FFmpeg
         subprocess.run([
-            "ffmpeg", "-i", file_path, "-ar", "16000", "-ac", "1", converted_path
+            "ffmpeg", "-i", file_path,
+            "-ar", "44100",               # Aumenta il sample rate per maggiore chiarezza
+            "-ac", "1",                   # Audio mono per ottimizzazione
+            "-af", "dynaudnorm=f=150:g=15,highpass=f=150,lowpass=f=4000,acompressor=threshold=-20dB:ratio=4:attack=5:release=50",
+            converted_path
         ], check=True)
 
         result = model.transcribe(
             converted_path,
             language='it',
-            fp16=False,
+            fp16=fp16,  # FP16 abilitato solo se supportato
             condition_on_previous_text=False,
             task="transcribe",
-            beam_size=5
+            beam_size=1,               # Ridotto il beam size per maggiore velocità
+            temperature=0.0            # Riduce la variabilità per elaborazione più rapida
         )
         text = result.get('text', '').strip()
 
