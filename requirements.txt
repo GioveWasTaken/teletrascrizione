@@ -2,12 +2,7 @@ numpy<2
 ffmpeg-python
 python-telegram-bot==13.15
 psutil
-urllib3
-six
 torch
 openai-whisper
-python-telegram-bot==13.15
-psutil
 tqdm
 requests
-ffmpeg-python
