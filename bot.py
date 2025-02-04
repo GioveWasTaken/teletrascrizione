@@ -14,6 +14,7 @@ from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, Comm
 import socket
 import logging
 import gc  # Import per la gestione della memoria
+import time  # Per misurare i tempi di esecuzione
 
 # Configurazione logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 socket.setdefaulttimeout(1000)  # Aumentato il timeout a 1000 secondi
 
 # Ottimizzazione: Forzare l'uso di tutti i core disponibili
-torch.set_num_threads(torch.get_num_threads() * 2)  # Massimizza l'uso dei core disponibili
+torch.set_num_threads(psutil.cpu_count(logical=True) * 2)  # Massimizza l'uso dei core disponibili
 
 TOKEN = "7837262453:AAGf5poQab9t3v7TGHnn7fGIX8BBtuo6f8k"
 
@@ -116,11 +117,13 @@ def transcribe_audio(file_path):
         # Ottimizzazione FFmpeg per ridurre i tempi e migliorare la qualità
         subprocess.run([
             "ffmpeg", "-i", file_path,
-            "-ar", "22050",               # Migliore equilibrio tra qualità e velocità
+            "-ar", "16000",               # Riduzione della frequenza di campionamento per maggiore velocità
             "-ac", "1",                   # Audio mono
-            "-filter:a", "volume=1.5",    # Amplificazione per migliorare la chiarezza
+            "-filter:a", "volume=1.2",    # Leggera amplificazione per migliorare la chiarezza
             converted_path
         ], check=True)
+
+        start_time = time.time()  # Inizio misurazione del tempo di trascrizione
 
         result = model.transcribe(
             converted_path,
@@ -128,9 +131,14 @@ def transcribe_audio(file_path):
             fp16=fp16,
             condition_on_previous_text=False,
             task="transcribe",
-            beam_size=3,               # Migliora l'accuratezza rispetto a beam_size=1
-            temperature=0.0
+            beam_size=1,               # Ridotto per aumentare la velocità
+            temperature=0.0,
+            batch_size=16              # Aggiunto batch processing per velocizzare
         )
+
+        transcription_time = time.time() - start_time
+        logger.info(f"⏱️ Tempo di trascrizione: {transcription_time:.2f} secondi")
+
         text = result.get('text', '').strip()
 
         if len(text) == 0 or text.isspace():
