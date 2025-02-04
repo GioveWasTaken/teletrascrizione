@@ -97,10 +97,10 @@ def worker():
 
         try:
             if os.path.exists(file_path):
-                transcription = transcribe_audio(file_path)
+                transcription, transcription_time = transcribe_audio(file_path)
                 if transcription:
                     transcription = censor_text(transcription)
-                    update.message.reply_text(f"📝 Trascrizione: {transcription}")
+                    update.message.reply_text(f"📝 Trascrizione: {transcription}\n⏱️ _Tempo di trascrizione: {transcription_time:.2f} secondi_", parse_mode='Markdown')
             else:
                 logger.error("Errore: file audio non trovato.")
         except Exception as e:
@@ -132,8 +132,7 @@ def transcribe_audio(file_path):
             condition_on_previous_text=False,
             task="transcribe",
             beam_size=1,               # Ridotto per aumentare la velocità
-            temperature=0.0,
-            batch_size=16              # Aggiunto batch processing per velocizzare
+            temperature=0.0
         )
 
         transcription_time = time.time() - start_time
@@ -142,9 +141,9 @@ def transcribe_audio(file_path):
         text = result.get('text', '').strip()
 
         if len(text) == 0 or text.isspace():
-            return None
+            return None, transcription_time
 
-        return text
+        return text, transcription_time
     except subprocess.CalledProcessError as e:
         logger.exception("Errore di conversione audio con ffmpeg:")
     except Exception as e:
