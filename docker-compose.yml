@@ -3,6 +3,20 @@ version: '3.8'
 services:
   telegram-whisper-bot:
     build: .
+    container_name: telegram-whisper-bot
     environment:
-      TELEGRAM_BOT_TOKEN: "7837262453:AAGf5poQab9t3v7TGHnn7fGIX8BBtuo6f8k"
+      - TELEGRAM_BOT_TOKEN=7837262453:AAGf5poQab9t3v7TGHnn7fGIX8BBtuo6f8k
     restart: always
+    volumes:
+      - ./models:/models  # Salvataggio dei modelli Whisper localmente per evitare download ripetuti
+      - ./logs:/app/logs  # Log persistenti per il debug
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'    # Limita a 2 CPU core per il container
+          memory: 4G     # Limita a 4 GB di RAM
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

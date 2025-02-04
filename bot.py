@@ -10,12 +10,23 @@ import platform
 import torch
 from telegram import Update, ChatMember
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
+import socket
+socket.setdefaulttimeout(500)  # Timeout aumentato a 5 minuti
+
+# Token del bot Telegram
+TOKEN = "7837262453:AAGf5poQab9t3v7TGHnn7fGIX8BBtuo6f8k" #Assicurati che la variabile sia definita o sostituiscila con il token diretto
 
 # Funzione per determinare il modello in base alle specifiche del sistema
 def select_model():
     cpu_count = psutil.cpu_count(logical=True)
     total_ram = psutil.virtual_memory().total / (1024 ** 3)  # Convertito in GB
     device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+    system_info = platform.uname()
+
+    # Rilevamento specifico per MacBook M1/M2
+    if "arm" in system_info.machine or "Apple" in system_info.processor or "M1" in system_info.processor or "M2" in system_info.processor:
+        print("MacBook Apple Silicon rilevato. Utilizzo di 'medium' con MPS.")
+        return whisper.load_model("medium").to(device)
 
     if device != "cpu":
         print(f"Dispositivo accelerato rilevato: {device}")
@@ -24,8 +35,8 @@ def select_model():
         print("Sistema con alte prestazioni rilevato. Caricamento modello 'small'...")
         return whisper.load_model("small")
     else:
-        print("Sistema a basse risorse rilevato. Caricamento modello 'tiny'...")
-        return whisper.load_model("tiny")
+        print("Sistema a basse risorse rilevato. Caricamento modello 'base'...")
+        return whisper.load_model("base")
 
 # Caricamento del modello basato sulle specifiche del sistema
 model = select_model()
