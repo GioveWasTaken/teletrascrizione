@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 socket.setdefaulttimeout(1000)  # Aumentato il timeout a 1000 secondi
 
 # Ottimizzazione: Forzare l'uso di tutti i core disponibili
-torch.set_num_threads(psutil.cpu_count(logical=True))
+torch.set_num_threads(torch.get_num_threads() * 2)  # Massimizza l'uso dei core disponibili
 
 TOKEN = "7837262453:AAGf5poQab9t3v7TGHnn7fGIX8BBtuo6f8k"
 
@@ -61,27 +61,11 @@ def download_model(model_size):
 
     raise Exception("❌ Impossibile scaricare il modello da entrambe le fonti.")
 
-# Funzione per determinare il modello basato sulle specifiche del sistema
+# Forzare sempre l'utilizzo del modello 'small'
 def select_model():
-    cpu_count = psutil.cpu_count(logical=True)
-    total_ram = psutil.virtual_memory().total / (1024 ** 3)
-    system_info = platform.uname()
-
-    is_apple_silicon = "arm" in system_info.machine or "Apple" in system_info.processor
-    device = "cuda" if torch.cuda.is_available() and not is_apple_silicon else "cpu"
-
-    if is_apple_silicon:
-        model_size = "small" if total_ram < 16 else "medium"
-        fp16 = False
-    elif torch.cuda.is_available():
-        model_size = "small" if total_ram < 8 else "medium"
-        fp16 = True
-    elif cpu_count >= 4 and total_ram >= 8:
-        model_size = "medium"
-        fp16 = False
-    else:
-        model_size = "base"
-        fp16 = False
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    fp16 = True if device == "cuda" else False
+    model_size = "small"
 
     model_path = os.path.expanduser(f"~/.cache/whisper/{model_size}.pt")
 
@@ -129,11 +113,12 @@ def transcribe_audio(file_path):
     try:
         converted_path = file_path.replace(".ogg", ".wav")
 
-        # Ottimizzazione FFmpeg per ridurre i tempi
+        # Ottimizzazione FFmpeg per ridurre i tempi e migliorare la qualità
         subprocess.run([
             "ffmpeg", "-i", file_path,
-            "-ar", "16000",               # Sample rate ridotto per velocizzare
+            "-ar", "22050",               # Migliore equilibrio tra qualità e velocità
             "-ac", "1",                   # Audio mono
+            "-filter:a", "volume=1.5",    # Amplificazione per migliorare la chiarezza
             converted_path
         ], check=True)
 
@@ -143,7 +128,7 @@ def transcribe_audio(file_path):
             fp16=fp16,
             condition_on_previous_text=False,
             task="transcribe",
-            beam_size=1,
+            beam_size=3,               # Migliora l'accuratezza rispetto a beam_size=1
             temperature=0.0
         )
         text = result.get('text', '').strip()
