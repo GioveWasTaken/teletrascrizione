@@ -4,19 +4,19 @@ services:
   telegram-whisper-bot:
     build: .
     container_name: telegram-whisper-bot
-    environment:
-      - TELEGRAM_BOT_TOKEN=7837262453:AAGf5poQab9t3v7TGHnn7fGIX8BBtuo6f8k
+    env_file:
+      - .env  # Load the token from the .env file
     restart: always
     volumes:
-      - ./models:/models  # Salvataggio dei modelli Whisper localmente per evitare download ripetuti
-      - ./logs:/app/logs  # Log persistenti per il debug
+      - ./models:/models  # Persist Whisper models locally
+      - ./logs:/app/logs  # Persistent logs for debugging
     deploy:
       resources:
         limits:
-          cpus: '2.0'    # Limita a 2 CPU core per il container
-          memory: 4G     # Limita a 4 GB di RAM
+          cpus: '2.0'    # Limit to 2 CPU cores for the container
+          memory: 4G     # Limit to 4 GB of RAM
     logging:
       driver: "json-file"
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "5m"  # Maximum log size per file
+        max-file: "5"   # Maximum number of log files to keep
