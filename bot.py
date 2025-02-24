@@ -13,21 +13,25 @@ from telegram import Update, ChatMember
 from telegram.ext import Updater, MessageHandler, Filters, CallbackContext, CommandHandler
 import socket
 import logging
-import gc  # Import per la gestione della memoria
-import time  # Per misurare i tempi di esecuzione
+import gc
+import time
 
-# Configurazione logging
+# Logging configuration
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-socket.setdefaulttimeout(1000)  # Aumentato il timeout a 1000 secondi
+socket.setdefaulttimeout(1000)
 
-# Ottimizzazione: Forzare l'uso di tutti i core disponibili
-torch.set_num_threads(psutil.cpu_count(logical=True) * 2)  # Massimizza l'uso dei core disponibili
+# Optimize: Use all available cores
+torch.set_num_threads(psutil.cpu_count(logical=True) * 2)
 
-TOKEN = "7837262453:AAGf5poQab9t3v7TGHnn7fGIX8BBtuo6f8k"
+TOKEN = "INSERT TOKEN HERE"
 
-# Funzione per scaricare il modello
+# Default settings
+show_transcription_time = False
+transcription_language = "en"  # Default language set to English
+
+# Function to download the model
 def download_model(model_size):
     urls = {
         "huggingface": f"https://huggingface.co/openai/whisper-{model_size}/resolve/main/{model_size}.pt",
@@ -39,8 +43,8 @@ def download_model(model_size):
 
     for source, url in urls.items():
         try:
-            logger.info(f"Scaricamento del modello '{model_size}' da {source.capitalize()} ({url})...")
-            logger.info(f"📥 Il modello verrà scaricato in: {model_path}")  # Messaggio esplicito sul percorso di download
+            logger.info(f"Downloading model '{model_size}' from {source.capitalize()} ({url})...")
+            logger.info(f"The model will be saved at: {model_path}")
             response = requests.get(url, stream=True)
             total_size = int(response.headers.get('content-length', 0))
 
@@ -55,14 +59,14 @@ def download_model(model_size):
                     file.write(data)
                     bar.update(len(data))
 
-            logger.info(f"✅ Modello '{model_size}' scaricato con successo da {source.capitalize()} in {model_path}")
+            logger.info(f"Model '{model_size}' successfully downloaded from {source.capitalize()} at {model_path}")
             return model_path
         except Exception as e:
-            logger.warning(f"⚠️ Errore durante il download da {source.capitalize()}: {e}")
+            logger.warning(f"Error while downloading from {source.capitalize()}: {e}")
 
-    raise Exception("❌ Impossibile scaricare il modello da entrambe le fonti.")
+    raise Exception("Unable to download the model from both sources.")
 
-# Forzare sempre l'utilizzo del modello 'small'
+# Always use the 'small' model
 def select_model():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     fp16 = True if device == "cuda" else False
@@ -71,17 +75,17 @@ def select_model():
     model_path = os.path.expanduser(f"~/.cache/whisper/{model_size}.pt")
 
     try:
-        logger.info(f"Caricamento del modello '{model_size}' dalla cache locale...")
+        logger.info(f"Loading model '{model_size}' from local cache...")
         return whisper.load_model(model_size, device=device), fp16
     except Exception as e:
-        logger.warning(f"⚠️ Errore durante il caricamento dalla cache: {e}")
-        logger.info("Tentativo di scaricare il modello...")
+        logger.warning(f"Error loading from cache: {e}")
+        logger.info("Trying to download the model...")
 
     model_path = download_model(model_size)
     try:
         return whisper.load_model(model_size, device=device), fp16
     except Exception as e:
-        logger.warning(f"⚠️ Errore durante il caricamento del modello scaricato: {e}")
+        logger.warning(f"Error loading the downloaded model: {e}")
         raise
 
 model, fp16 = select_model()
@@ -100,11 +104,14 @@ def worker():
                 transcription, transcription_time = transcribe_audio(file_path)
                 if transcription:
                     transcription = censor_text(transcription)
-                    update.message.reply_text(f"📝 Trascrizione: {transcription}\n⏱️ _Tempo di trascrizione: {transcription_time:.2f} secondi_", parse_mode='Markdown')
+                    message = f"Transcription: {transcription}"
+                    if show_transcription_time:
+                        message += f"\nTranscription time: {transcription_time:.2f} seconds"
+                    update.message.reply_text(message, parse_mode='Markdown')
             else:
-                logger.error("Errore: file audio non trovato.")
+                logger.error("Error: audio file not found.")
         except Exception as e:
-            logger.exception("Errore nella trascrizione:")
+            logger.exception("Error during transcription:")
         finally:
             if os.path.exists(file_path):
                 os.remove(file_path)
@@ -114,29 +121,27 @@ def transcribe_audio(file_path):
     try:
         converted_path = file_path.replace(".ogg", ".wav")
 
-        # Ottimizzazione FFmpeg per ridurre i tempi e migliorare la qualità
         subprocess.run([
             "ffmpeg", "-i", file_path,
-            "-ar", "16000",               # Riduzione della frequenza di campionamento per maggiore velocità
-            "-ac", "1",                   # Audio mono
-            "-filter:a", "volume=1.2",    # Leggera amplificazione per migliorare la chiarezza
-            converted_path
+            "-ar", "16000",
+            "-ac", "1",
+            "-filter:a", "volume=1.2"
         ], check=True)
 
-        start_time = time.time()  # Inizio misurazione del tempo di trascrizione
+        start_time = time.time()
 
         result = model.transcribe(
             converted_path,
-            language='it',
+            language=transcription_language,
             fp16=fp16,
             condition_on_previous_text=False,
             task="transcribe",
-            beam_size=1,               # Ridotto per aumentare la velocità
+            beam_size=1,
             temperature=0.0
         )
 
         transcription_time = time.time() - start_time
-        logger.info(f"⏱️ Tempo di trascrizione: {transcription_time:.2f} secondi")
+        logger.info(f"Transcription time: {transcription_time:.2f} seconds")
 
         text = result.get('text', '').strip()
 
@@ -145,14 +150,14 @@ def transcribe_audio(file_path):
 
         return text, transcription_time
     except subprocess.CalledProcessError as e:
-        logger.exception("Errore di conversione audio con ffmpeg:")
+        logger.exception("Audio conversion error with ffmpeg:")
     except Exception as e:
-        logger.exception("Errore durante la trascrizione:")
+        logger.exception("Error during transcription:")
     finally:
         if os.path.exists(converted_path):
             os.remove(converted_path)
-        gc.collect()  # Libera la memoria
-        torch.cuda.empty_cache()  # Pulisce la cache di PyTorch (anche su CPU)
+        gc.collect()
+        torch.cuda.empty_cache()
 
 def censor_text(text):
     for word in censored_words:
@@ -161,64 +166,96 @@ def censor_text(text):
     return text
 
 def voice_handler(update: Update, context: CallbackContext):
-    logger.info(f"Ricevuto messaggio vocale da {update.effective_user.username}")
+    logger.info(f"Received voice message from {update.effective_user.username}")
     file = update.message.voice.get_file()
     file_path = f"{file.file_id}.ogg"
     file.download(file_path)
     audio_queue.put((update, file_path))
 
-def add_censored_word(update: Update, context: CallbackContext):
-    user = update.effective_user
-    chat = update.effective_chat
-    member = chat.get_member(user.id)
-    if member.status in [ChatMember.ADMINISTRATOR, ChatMember.CREATOR]:
-        if context.args:
-            word = " ".join(context.args)
-            censored_words.add(word)
-            update.message.reply_text(f"Parola '{word}' aggiunta alla lista di censura.")
-        else:
-            update.message.reply_text("Usa il comando così: /censura <parola>")
+def add_blacklist_word(update: Update, context: CallbackContext):
+    if context.args:
+        word = " ".join(context.args)
+        censored_words.add(word)
+        update.message.reply_text(f"Word '{word}' added to the blacklist.")
     else:
-        update.message.reply_text("Solo gli amministratori possono aggiungere parole alla lista di censura.")
+        update.message.reply_text("Use the command as follows: /blacklist <word>")
 
-def remove_censored_word(update: Update, context: CallbackContext):
-    user = update.effective_user
-    chat = update.effective_chat
-    member = chat.get_member(user.id)
-    if member.status in [ChatMember.ADMINISTRATOR, ChatMember.CREATOR]:
-        if context.args:
-            word = " ".join(context.args)
-            if word in censored_words:
-                censored_words.remove(word)
-                update.message.reply_text(f"Parola '{word}' rimossa dalla lista di censura.")
-            else:
-                update.message.reply_text(f"La parola '{word}' non è presente nella lista di censura.")
+def remove_blacklist_word(update: Update, context: CallbackContext):
+    if context.args:
+        word = " ".join(context.args)
+        if word in censored_words:
+            censored_words.remove(word)
+            update.message.reply_text(f"Word '{word}' removed from the blacklist.")
         else:
-            update.message.reply_text("Usa il comando così: /rimuovi_censura <parola>")
+            update.message.reply_text(f"Word '{word}' is not in the blacklist.")
     else:
-        update.message.reply_text("Solo gli amministratori possono rimuovere parole dalla lista di censura.")
+        update.message.reply_text("Use the command as follows: /remove_blacklist <word>")
 
-def list_censored_words(update: Update, context: CallbackContext):
+def list_blacklist(update: Update, context: CallbackContext):
     if censored_words:
-        update.message.reply_text("Parole censurate:\n" + "\n".join(censored_words))
+        update.message.reply_text("Blacklisted words:\n" + "\n".join(censored_words))
     else:
-        update.message.reply_text("Nessuna parola censurata.")
+        update.message.reply_text("No words in the blacklist.")
 
+
+# Command to toggle transcription time display
+def toggle_time(update: Update, context: CallbackContext):
+    global show_transcription_time
+    show_transcription_time = not show_transcription_time
+    status = "enabled" if show_transcription_time else "disabled"
+    update.message.reply_text(f"Transcription time display is now {status}.")
+
+
+# Command to change transcription language
+def change_language(update: Update, context: CallbackContext):
+    global transcription_language
+    if context.args:
+        lang = context.args[0].lower()
+        if lang in ['en', 'it']:
+            transcription_language = lang
+            update.message.reply_text(f"Transcription language set to '{lang}'.")
+        else:
+            update.message.reply_text("Invalid language. Use /language en or /language it.")
+    else:
+        update.message.reply_text("Use the command as follows: /language <en|it>")
+
+
+# Command to check if the bot is responsive
+def ping(update: Update, context: CallbackContext):
+    update.message.reply_text("pong")
+
+
+# Main function to start the bot
 def main():
-    logger.info("✅ Avvio del bot...")
+    logger.info("Starting the bot...")
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
 
+    # Handlers for voice message transcription
     dp.add_handler(MessageHandler(Filters.voice, voice_handler))
-    dp.add_handler(CommandHandler("censura", add_censored_word))
-    dp.add_handler(CommandHandler("rimuovi_censura", remove_censored_word))
-    dp.add_handler(CommandHandler("lista_censure", list_censored_words))
 
+    # Handlers for blacklist management
+    dp.add_handler(CommandHandler("blacklist", add_blacklist_word))
+    dp.add_handler(CommandHandler("remove_blacklist", remove_blacklist_word))
+    dp.add_handler(CommandHandler("list_blacklist", list_blacklist))
+
+    # Handler for toggling transcription time display
+    dp.add_handler(CommandHandler("time", toggle_time))
+
+    # Handler for changing transcription language
+    dp.add_handler(CommandHandler("language", change_language))
+
+    # Handler for ping command
+    dp.add_handler(CommandHandler("ping", ping))
+
+    # Start worker thread
     threading.Thread(target=worker, daemon=True).start()
 
+    # Start the bot
     updater.start_polling()
-    logger.info("🚀 Il bot è attivo e in ascolto!")
+    logger.info("The bot is now listening...")
     updater.idle()
+
 
 if __name__ == '__main__':
     main()
